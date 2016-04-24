@@ -104,7 +104,7 @@ class TaskList(base._Widget, base.PaddingMixin, base.MarginMixin):
 
     def update(self, window=None):
         group = self.bar.screen.group
-        if not window or window and window.group is group:
+        if not window or window and group in window.groups:
             self.bar.draw()
 
     def remove_icon_cache(self, window):
@@ -174,7 +174,9 @@ class TaskList(base._Widget, base.PaddingMixin, base.MarginMixin):
             window = self.get_clicked(x, y)
 
         if window and window is not current_win:
-            window.group.focus(window, False)
+            g = window.shown_group()
+            if g is not None:
+                g.focus(window, False)
             if window.floating:
                 window.cmd_bring_to_front()
 
@@ -242,9 +244,12 @@ class TaskList(base._Widget, base.PaddingMixin, base.MarginMixin):
                 state = 'V '
             task = "%s%s" % (state, w.name if w and w.name else " ")
 
+            g = w.shown_group()
+            if g is None:
+                continue
             if w.urgent:
                 border = self.urgent_border
-            elif w is w.group.currentWindow:
+            elif w is g.currentWindow:
                 border = self.border
             else:
                 border = self.background or self.bar.background

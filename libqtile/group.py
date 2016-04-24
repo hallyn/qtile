@@ -41,7 +41,7 @@ class _Group(command.CommandObject):
     """A container for a bunch of windows
 
     Analogous to workspaces in other window managers. Each client window
-    managed by the window manager belongs to exactly one group.
+    managed by the window manager belongs to at least one group.
     """
     def __init__(self, name, layout=None):
         self.name = name
@@ -166,6 +166,7 @@ class _Group(command.CommandObject):
 
     def _setScreen(self, screen):
         """Set this group's screen to new_screen"""
+        # TODO serge - check for resulting window conflicts
         if screen == self.screen:
             return
         self.screen = screen
@@ -248,7 +249,7 @@ class _Group(command.CommandObject):
     def add(self, win, focus=True, force=False):
         hook.fire("group_window_add")
         self.windows.add(win)
-        win.group = self
+        win.groups.append(self)
         try:
             if 'fullscreen' in win.window.get_net_wm_state() and \
                     self.qtile.config.auto_fullscreen:
@@ -271,7 +272,7 @@ class _Group(command.CommandObject):
     def remove(self, win, force=False):
         self.windows.remove(win)
         hadfocus = self._remove_from_focus_history(win)
-        win.group = None
+        win.groups.remove(self)
 
         if win.floating:
             nextfocus = self.floating_layout.remove(win)

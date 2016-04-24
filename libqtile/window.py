@@ -160,7 +160,7 @@ class _Window(command.CommandObject):
     def __init__(self, window, qtile):
         self.window, self.qtile = window, qtile
         self.hidden = True
-        self.group = None
+        self.groups = []
         self.icons = {}
         window.set_attribute(eventmask=self._windowMask)
 
@@ -305,8 +305,8 @@ class _Window(command.CommandObject):
             self.hints['urgent'] = False
             hook.fire('client_urgent_hint_changed', self)
 
-        if getattr(self, 'group', None):
-            self.group.layoutAll()
+        for g in self.groups:
+            g.layoutAll()
 
         return
 
@@ -333,11 +333,23 @@ class _Window(command.CommandObject):
         if not val:
             self.hints['urgent'] = False
 
+    # Only one of the window's groups may be on an active screen.
+    # Return it, or None if none is currently on an active screen.
+    def shown_group(self):
+        for g in self.groups:
+            if g.screen:
+                return g
+        return None
+
     def info(self):
-        if self.group:
-            group = self.group.name
-        else:
-            group = None
+        group = None
+        for g in self.groups:
+            if group is None:
+                group = "[%s" % g.name
+            else:
+                group += "," + g.name
+        if group is not None:
+            group += "]"
         return dict(
             name=self.name,
             x=self.x,
@@ -462,9 +474,10 @@ class _Window(command.CommandObject):
             height -= margin * 2
 
         # save x and y float offset
-        if self.group is not None and self.group.screen is not None:
-            self.float_x = x - self.group.screen.x
-            self.float_y = y - self.group.screen.y
+        g = self.shown_group()
+        if g is not None:
+            self.float_x = x - g.screen.x
+            self.float_y = y - g.screen.y
 
         self.x = x
         self.y = y
@@ -785,10 +798,10 @@ class Window(_Window):
     @floating.setter
     def floating(self, do_float):
         if do_float and self._float_state == NOT_FLOATING:
-            if self.group and self.group.screen:
-                screen = self.group.screen
+            g = self.shown_group()
+            if g is not None:
                 self._enablefloating(
-                    screen.x + self.float_x, screen.y + self.float_y, self.float_width, self.float_height
+                    g.screen.x + self.float_x, g.screen.y + self.float_y, self.float_width, self.float_height
                 )
             else:
                 # if we are setting floating early, e.g. from a hook, we don't have a screen yet
@@ -799,7 +812,8 @@ class Window(_Window):
                 self.float_width = self.width
                 self.float_height = self.height
             self._float_state = NOT_FLOATING
-            self.group.mark_floating(self, False)
+            for g in self.groups:
+                g.mark_floating(self, False)
             hook.fire('float_change')
 
     def toggle_floating(self):
@@ -817,6 +831,12 @@ class Window(_Window):
         warnings.warn("disablefloating is deprecated, use floating=False", DeprecationWarning)
         self.floating = False
 
+    def closest_screen(self):
+        g = self.shown_group()
+        if g is not None:
+            return g.screen
+        return self.qtile.find_closest_screen(self.x, self.y)
+
     @property
     def fullscreen(self):
         return self._float_state == FULLSCREEN
@@ -827,8 +847,7 @@ class Window(_Window):
         prev_state = set(self.window.get_property('_NET_WM_STATE', 'ATOM', unpack=int))
 
         if do_full:
-            screen = self.group.screen or \
-                self.qtile.find_closest_screen(self.x, self.y)
+            screen = self.closest_screen()
 
             self._enablefloating(
                 screen.x,
@@ -862,8 +881,7 @@ class Window(_Window):
     @maximized.setter
     def maximized(self, do_maximize):
         if do_maximize:
-            screen = self.group.screen or \
-                self.qtile.find_closest_screen(self.x, self.y)
+            screen = self.closest_screen()
 
             self._enablefloating(
                 screen.dx,
@@ -921,8 +939,8 @@ class Window(_Window):
         """
         self.defunct = True
         screen = self.qtile.screens[screen]
-        if self.group:
-            self.group.remove(self)
+        for g in self.groups:
+            g.remove(self)
         s = Static(self.window, self.qtile, screen, x, y, width, height)
         self.qtile.windowMap[self.window.wid] = s
         hook.fire("client_managed", s)
@@ -952,10 +970,12 @@ class Window(_Window):
             self.width = 0
 
         screen = self.qtile.find_closest_screen(self.x, self.y)
-        if self.group and screen is not None and screen != self.group.screen:
-            self.group.remove(self, force=True)
-            screen.group.add(self, force=True)
-            self.qtile.toScreen(screen.index)
+        if screen is not None:
+            g = self.shown_group()
+            if g is not None:
+                g.remove(self, force=True)
+                screen.group.add(self, force=True)
+                self.qtile.toScreen(screen.index)
 
         self._reconfigure_floating()
 
@@ -988,8 +1008,8 @@ class Window(_Window):
             )
         if self._float_state != new_float_state:
             self._float_state = new_float_state
-            if self.group:  # may be not, if it's called from hook
-                self.group.mark_floating(self, True)
+            for g in self.groups:
+                g.mark_floating(self, True)
             hook.fire('float_change')
 
     def _enablefloating(self, x=None, y=None, w=None, h=None,
@@ -1001,6 +1021,23 @@ class Window(_Window):
             self.height = h
         self._reconfigure_floating(new_float_state=new_float_state)
 
+    def addgroup(self, groupName=None):
+        """Add window to a specified group (in addition to its current groups"""
+        if groupName is None:
+            group = self.qtile.currentGroup
+        else:
+            group = self.qtile.groupMap.get(groupName)
+            if group is None:
+                raise command.CommandError("No such group: %s" % groupName)
+
+        if group not in self.groups:
+            g = self.shown_group()
+            if group.screen and g is not None:
+                raise command.CommandError("Groups %s and %s are both shown" % (group.screen, g))
+            if group.screen and self.x < group.screen.x:
+                self.x += group.screen.x
+            group.add(self)
+
     def togroup(self, groupName=None):
         """Move window to a specified group"""
         if groupName is None:
@@ -1010,13 +1047,13 @@ class Window(_Window):
             if group is None:
                 raise command.CommandError("No such group: %s" % groupName)
 
-        if self.group is not group:
+        if group not in self.groups:
             self.hide()
-            if self.group:
-                if self.group.screen:
+            for g in self.groups:
+                if g.screen:
                     # for floats remove window offset
-                    self.x -= self.group.screen.x
-                self.group.remove(self)
+                    self.x -= g.screen.x
+                g.remove(self)
 
             if group.screen and self.x < group.screen.x:
                 self.x += group.screen.x
@@ -1057,13 +1094,14 @@ class Window(_Window):
 
     def handle_EnterNotify(self, e):
         hook.fire("client_mouse_enter", self)
-        if self.qtile.config.follow_mouse_focus and \
-                self.group.currentWindow != self:
-            self.group.focus(self, False)
-        if self.group.screen and \
-                self.qtile.currentScreen != self.group.screen and \
+        for g in self.groups:
+            if self.qtile.config.follow_mouse_focus and \
+                g.currentWindow != self:
+                    g.focus(self, False)
+            if g.screen and \
+                self.qtile.currentScreen != g.screen and \
                 self.qtile.config.follow_mouse_focus:
-            self.qtile.toScreen(self.group.screen.index, False)
+                    self.qtile.toScreen(g.screen.index, False)
         return True
 
     def handle_ConfigureRequest(self, e):
@@ -1080,7 +1118,8 @@ class Window(_Window):
         else:
             width, height, x, y = self.width, self.height, self.x, self.y
 
-        if self.group and self.group.screen:
+        g = self.shown_group()
+        if g is not None:
             self.place(
                 x, y,
                 width, height,
@@ -1154,17 +1193,20 @@ class Window(_Window):
             self.window.set_property('_NET_WM_STATE', list(current_state))
         elif atoms["_NET_ACTIVE_WINDOW"] == opcode:
             source = data.data32[0]
+            g = self.shown_group()
             if source == 2:  # XCB_EWMH_CLIENT_SOURCE_TYPE_NORMAL
                 logger.info("Focusing window by pager")
-                self.qtile.currentScreen.setGroup(self.group)
-                self.group.focus(self)
+                if g is not None:
+                    # I think g must not be None, so we should raise a bug if it is?
+                    self.qtile.currentScreen.setGroup(g)
+                    g.focus(self)
             else:  # XCB_EWMH_CLIENT_SOURCE_TYPE_OTHER
                 focus_behavior = self.qtile.config.focus_on_window_activation
-                if focus_behavior == "focus" or (focus_behavior == "smart" and self.group.screen and self.group.screen == self.qtile.currentScreen):
+                if focus_behavior == "focus" or (focus_behavior == "smart" and g is not None and g.screen == self.qtile.currentScreen):
                     logger.info("Focusing window")
-                    self.qtile.currentScreen.setGroup(self.group)
-                    self.group.focus(self)
-                elif focus_behavior == "urgent" or (focus_behavior == "smart" and not self.group.screen):
+                    self.qtile.currentScreen.setGroup(g)
+                    g.focus(self)
+                elif focus_behavior == "urgent" or (focus_behavior == "smart" and g is None):
                     logger.info("Setting urgent flag for window")
                     self.urgent = True
                 else:
@@ -1208,31 +1250,34 @@ class Window(_Window):
             # self.updateState()
             self.updateState()
         elif name == "_NET_WM_USER_TIME":
+            g = self.shown_group()
             if not self.qtile.config.follow_mouse_focus and \
-                    self.group.currentWindow != self:
-                self.group.focus(self, False)
+                    g.currentWindow != self:
+                g.focus(self, False)
         else:
             logger.info("Unknown window property: %s", name)
         return False
 
     def _items(self, name):
+        g = self.shown_group()
         if name == "group":
             return (True, None)
         elif name == "layout":
-            return (True, list(range(len(self.group.layouts))))
+            return (True, list(range(len(g.layouts))))
         elif name == "screen":
             return (True, None)
 
     def _select(self, name, sel):
+        g = self.shown_group()
         if name == "group":
-            return self.group
+            return g
         elif name == "layout":
             if sel is None:
-                return self.group.layout
+                return g.layout
             else:
-                return utils.lget(self.group.layouts, sel)
+                return utils.lget(g.layouts, sel)
         elif name == "screen":
-            return self.group.screen
+            return g.screen
 
     def __repr__(self):
         return "Window(%r)" % self.name
@@ -1247,6 +1292,9 @@ class Window(_Window):
         this, otherwise be brutal.
         """
         self.kill()
+
+    def cmd_addgroup(self, groupName=None):
+        self.addgroup(groupName)
 
     def cmd_togroup(self, groupName=None):
         """Move window to a specified group.
@@ -1362,14 +1410,19 @@ class Window(_Window):
         if self.floating:
             self.tweak_float(dx, dy)
             return
-        for window in self.group.windows:
+        # Q Serge - can this only happen on an active screen?
+        # If not then i'm doing this wrong (using the self.shown_group)
+        g = self.shown_group()
+        if g is None:
+            return
+        for window in g.windows:
             if window == self or window.floating:
                 continue
             if self._is_in_window(curx, cury, window):
-                clients = self.group.layout.clients
+                clients = g.layout.clients
                 index1 = clients.index(self)
                 index2 = clients.index(window)
                 clients[index1], clients[index2] = clients[index2], clients[index1]
-                self.group.layout.focused = index2
-                self.group.layoutAll()
+                g.layout.focused = index2
+                g.layoutAll()
                 break

@@ -359,8 +359,10 @@ def test_select_window(self):
     win = self.testWindow("test")
     wid = self.c.window.info()["id"]
 
-    assert self.c.window.group.info()["name"] == "a"
-    assert_raises(libqtile.command.CommandError, self.c.window.group["a"].info)
+    g = self.c.window.shown_group()
+    if g is not None:
+        assert g.info()["name"] == "a"
+        assert_raises(libqtile.command.CommandError, g["a"].info)
 
     assert len(self.c.window.layout.info()["stacks"]) == 1
     assert len(self.c.window.layout[1].info()["stacks"]) == 2

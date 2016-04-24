@@ -41,16 +41,18 @@ class DebugInfo(base._TextBox):
 
         w = self.bar.screen.group.currentWindow
 
-        if isinstance(w.group.layout, layout.Stack):
-            stack = w.group.layout.currentStack
-            stackOffset = w.group.layout.currentStackOffset
+        g = w.shown_group()
+
+        if g is not None and isinstance(g.layout, layout.Stack):
+            stack = g.layout.currentStack
+            stackOffset = g.layout.currentStackOffset
             idx = stack.lst.index(w)
             current = stack.current
             self.text = "Stack: %s Idx: %s Cur: %s" % (stackOffset,
                                                        idx,
                                                        current)
-        elif isinstance(w.group.layout, layout.TreeTab):
-            node = w.group.layout._nodes[w]
+        elif g is not None and isinstance(g.layout, layout.TreeTab):
+            node = g.layout._nodes[w]
             nodeIdx = node.parent.children.index(node)
             snode = node
             level = 1

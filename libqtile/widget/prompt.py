@@ -211,7 +211,8 @@ class WindowCompleter(object):
         if not self.lookup:
             self.lookup = []
             for wid, window in self.qtile.windowMap.items():
-                if window.group and window.name.lower().startswith(txt):
+                g = window.shown_group()
+                if g is not None and window.name.lower().startswith(txt):
                     self.lookup.append((window.name, wid))
 
             self.lookup.sort()

@@ -548,8 +548,9 @@ class Qtile(command.CommandObject):
         if c:
             hook.fire("client_killed", c)
             self.reset_gaps(c)
-            if getattr(c, "group", None):
-                c.group.remove(c)
+            g = c.shown_group()
+            if g is not None:
+                g.remove(c)
             del self.windowMap[win]
             self.update_client_list()
 
@@ -615,7 +616,7 @@ class Qtile(command.CommandObject):
                     return
                 self.windowMap[w.wid] = c
                 # Window may have been bound to a group in the hook.
-                if not c.group:
+                if len(c.groups) == 0:
                     self.currentScreen.group.add(c, focus=c.can_steal_focus())
                 self.update_client_list()
                 hook.fire("client_managed", c)
@@ -1057,7 +1058,8 @@ class Qtile(command.CommandObject):
     def handle_MapRequest(self, e):
         w = xcbq.Window(self.conn, e.window)
         c = self.manage(w)
-        if c and (not c.group or not c.group.screen):
+        g = c.shown_group()
+        if g is None:
             return
         w.map()
 
@@ -1532,17 +1534,29 @@ class Qtile(command.CommandObject):
             self.groups[indexb], self.groups[indexa]
         hook.fire("setgroup")
 
+        try:
+            w.groups.remove(groupb)
+        except:
+            pass
+        try:
+            w.groups.remove(groupa)
+        except:
+            pass
         # update window _NET_WM_DESKTOP
         for group in (self.groups[indexa], self.groups[indexb]):
             for w in group.windows:
-                w.group = group
+                w.groups.append(group)
 
     def find_window(self, wid):
         window = self.windowMap.get(wid)
         if window:
-            if not window.group.screen:
-                self.currentScreen.setGroup(window.group)
-            window.group.focus(window, False)
+            if len(window.groups) == 0:
+                return
+            g = window.shown_group()
+            if g is None:
+                g = window.groups[0]
+                self.currentScreen.setGroup(g)
+            g.focus(window, False)
 
     def cmd_findwindow(self, prompt="window", widget="prompt"):
         """Launch prompt widget to find a window of the given name
@@ -1570,8 +1584,10 @@ class Qtile(command.CommandObject):
         """Focus next window with urgent hint"""
         try:
             nxt = [w for w in self.windowMap.values() if w.urgent][0]
-            nxt.group.cmd_toscreen()
-            nxt.group.focus(nxt)
+            g = nxt.shown_group()
+            if g is not None:
+                g.cmd_toscreen()
+                g.focus(nxt)
         except IndexError:
             pass  # no window had urgent set
 
